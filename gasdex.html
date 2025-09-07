@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>apple proxy</title>
+<style>
+body {
+  font-family: "Comic Sans MS", cursive, sans-serif;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: linear-gradient(to right, #00f2fe, #4facfe);
+}
+header {
+  padding: 10px;
+  text-align: center;
+  color: white;
+  font-size: 28px;
+  text-transform: lowercase;
+  font-weight: bold;
+}
+#controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,0.2);
+  padding: 8px;
+  gap: 6px;
+}
+button, select {
+  font-family: "Comic Sans MS", cursive, sans-serif;
+  border: none;
+  padding: 8px 12px;
+  font-size: 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+button:hover {
+  background: rgba(255,255,255,0.6);
+}
+#url {
+  width: 45%;
+  padding: 8px;
+  font-size: 14px;
+  border: none;
+  outline: none;
+  border-radius: 6px;
+}
+#iframeContainer {
+  flex: 1;
+  margin: 8px;
+  border-radius: 10px;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.3);
+  position: relative;
+  overflow: hidden;
+}
+iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+#loadingOverlay {
+  position: absolute;
+  top:0; left:0; right:0; bottom:0;
+  background: rgba(0,0,0,0.4);
+  color:white;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:20px;
+  z-index:10;
+  display:none;
+}
+#errorMsg {
+  position:absolute;
+  top:0;
+  left:0;
+  width:100%;
+  background: rgba(255,0,0,0.8);
+  color:white;
+  padding:5px 10px;
+  font-size:14px;
+  z-index:20;
+  display:none;
+}
+</style>
+</head>
+<body>
+<header>apple proxy</header>
+
+<div id="controls">
+  <button id="backBtn">⬅</button>
+  <button id="forwardBtn">➡</button>
+  <button id="reloadBtn">⟳</button>
+  <input type="text" id="url" placeholder="enter url e.g. https://example.com">
+  <button id="goBtn">go</button>
+  <select id="history"></select>
+</div>
+
+<div id="iframeContainer">
+  <div id="loadingOverlay">Loading...</div>
+  <div id="errorMsg"></div>
+  <iframe id="iframe"></iframe>
+</div>
+
+<script>
+const iframe=document.getElementById('iframe');
+const urlInput=document.getElementById('url');
+const goBtn=document.getElementById('goBtn');
+const backBtn=document.getElementById('backBtn');
+const forwardBtn=document.getElementById('forwardBtn');
+const reloadBtn=document.getElementById('reloadBtn');
+const historyDropdown=document.getElementById('history');
+const loadingOverlay=document.getElementById('loadingOverlay');
+const errorMsg=document.getElementById('errorMsg');
+
+let historyStack=[];
+let historyIndex=-1;
+
+function updateHistoryUI(){
+  historyDropdown.innerHTML="";
+  historyStack.forEach((u,i)=>{
+    const opt=document.createElement("option");
+    opt.textContent=(i===historyIndex?"▶ ":"")+u;
+    opt.value=i;
+    historyDropdown.appendChild(opt);
+  });
+  historyDropdown.selectedIndex=historyIndex;
+}
+
+function navigate(url, method="GET", formData=null, addToHistory=true){
+  if(!url) return;
+  loadingOverlay.style.display="flex";
+  errorMsg.style.display="none";
+
+  google.script.run.withSuccessHandler(html=>{
+    try {
+      const doc=iframe.contentDocument||iframe.contentWindow.document;
+      doc.open(); doc.write(html); doc.close();
+      setTimeout(()=>{ interceptLinks(); interceptForms(); },200);
+    } catch(e){
+      // fallback if doc.write blocked
+      iframe.src = `?url=${encodeURIComponent(url)}`;
+    }
+    loadingOverlay.style.display="none";
+  }).withFailureHandler(err=>{
+    loadingOverlay.style.display="none";
+    errorMsg.style.display="block";
+    errorMsg.textContent = "Error loading page: "+err.message;
+  }).fetchUrl(url,method,formData);
+
+  if(addToHistory){
+    historyStack=historyStack.slice(0,historyIndex+1);
+    historyStack.push(url);
+    historyIndex=historyStack.length-1;
+    updateHistoryUI();
+  }
+  urlInput.value=url;
+}
+
+function interceptLinks(){
+  try {
+    const doc=iframe.contentDocument||iframe.contentWindow.document;
+    doc.querySelectorAll('a[href]').forEach(a=>{
+      a.addEventListener('click',e=>{
+        e.preventDefault();
+        const href=a.getAttribute('href');
+        if(!href) return;
+        const abs=new URL(href,urlInput.value).href;
+        navigate(abs);
+      });
+    });
+  } catch(e){}
+}
+
+function interceptForms(){
+  try {
+    const doc=iframe.contentDocument||iframe.contentWindow.document;
+    doc.querySelectorAll('form').forEach(form=>{
+      form.addEventListener('submit',e=>{
+        e.preventDefault();
+        const action=form.getAttribute('action')||urlInput.value;
+        const method=(form.getAttribute('method')||'GET').toUpperCase();
+        const abs=new URL(action,urlInput.value).href;
+        if(method==='GET'){
+          const params=new URLSearchParams(new FormData(form)).toString();
+          const finalUrl=abs+(abs.includes('?')?'&':'?')+params;
+          navigate(finalUrl,'GET');
+        } else {
+          const formData={};
+          for(let[k,v] of new FormData(form).entries()) formData[k]=v;
+          navigate(abs,'POST',formData);
+        }
+      });
+    });
+  } catch(e){}
+}
+
+// Controls
+goBtn.addEventListener('click',()=>navigate(urlInput.value));
+urlInput.addEventListener('keydown',e=>{if(e.key==='Enter') navigate(urlInput.value);});
+backBtn.addEventListener('click',()=>{if(historyIndex>0){historyIndex--;navigate(historyStack[historyIndex],'GET',null,false);updateHistoryUI();}});
+forwardBtn.addEventListener('click',()=>{if(historyIndex<historyStack.length-1){historyIndex++;navigate(historyStack[historyIndex],'GET',null,false);updateHistoryUI();}});
+reloadBtn.addEventListener('click',()=>{if(historyIndex>=0) navigate(historyStack[historyIndex],'GET',null,false);});
+historyDropdown.addEventListener('change',()=>{const i=parseInt(historyDropdown.value);if(!isNaN(i)&&i>=0&&i<historyStack.length){historyIndex=i;navigate(historyStack[historyIndex],'GET',null,false);updateHistoryUI();}});
+</script>
+</body>
+</html>
